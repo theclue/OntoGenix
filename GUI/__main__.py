@@ -21,16 +21,13 @@ def dir_path(path):
     else:
         return None
 
-#api_model : str = 'gpt-3.5-turbo'
-#api_model : str = 'gpt-4-1106-preview'
-#api_model : str = 'gpt-4o-2024-05-13' # gpt-4o
 class APP(QApplication):
     def __init__(self):
         parser = argparse.ArgumentParser(usage="python -m GUI [--client OR -c <(openai|azure)>] \n\
                                          [--ssl-cert OR -sc <path_to_cert>] [--api-model OR -am <api_model>] \n\
                                          [--extension-mapping OR -em <mapping_extension>]")
         # NOTE: --client (PUBLIC|AZURE) --ssl-cert <path_to_cert> --api-model <api_model> --extension-mapping <mapping_extension>
-        parser.add_argument("--api-model", "-am", dest="api_model", default="gpt-4o-2024-05-13") # ""
+        parser.add_argument("--api-model", "-am", dest="api_model", default=None)
         parser.add_argument("--client", "-c", dest="client", default="openai")
         parser.add_argument("--extension-mapping", "-em", dest="mapping_extension", default="ttl")
         parser.add_argument("--ssl-cert", "-sc", dest="ssl_cert", default=None, type=dir_path)
@@ -42,11 +39,13 @@ class APP(QApplication):
         # --- exec ---
         sys.exit(self.exec_())
 
-    def load_style(self, path="./GUI/css/Manjaro.qss"):
+    def load_style(self, path=None):
         """
             Read the style of the GUI from the QSS file
         """
         if not hasattr(self, "app_style"):
+            if path is None:
+                path = os.path.join(os.path.dirname(__file__), "css", "Manjaro.qss")
             with open(path, encoding="utf-8") as f:
                 self.app_style = f.read()
         self.setStyleSheet(self.app_style)

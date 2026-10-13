@@ -3,11 +3,12 @@
     TODO: Document this
 """
 
+import asyncio
 import base64
 import json
+import os
 from abc import ABC
 
-from dotenv import dotenv_values
 from openai import AzureOpenAI, OpenAI
 from typing import Union
 
@@ -15,35 +16,19 @@ class AbstractLlm(ABC):
     error_message = None
 
     def __init__(self, metadata: dict):
-        # set api key path
-        config = dotenv_values(metadata['api_key_path'])
-        # create a client with its api key
-        if metadata['client'] == "azure" and 'AZURE_OPENAI_ENDPOINT' in config.keys():
-            # We read the model and the api version either from the .env file or from the metadata dictionary
-            model = config['AZURE_DEPLOYMENT'] if config['AZURE_DEPLOYMENT'] is not None else metadata['model']
-            api_version = config['OPENAI_API_VERSION'] if config['OPENAI_API_VERSION'] is not None else metadata['api_model']
-            # We create an OpenAI Azure client (BASF)
-            self.client = AzureOpenAI(
-                api_key=config['OPENAI_API_KEY'],
-                azure_endpoint=config['AZURE_OPENAI_ENDPOINT'],
-                api_version=api_version,
-                azure_deployment=model
-            )
-        elif metadata['client'] == "azure" and 'AZURE_OPENAI_ENDPOINT' not in config.keys():
-            print("Detected Azure Client option but no AZURE_OPENAI_ENDPOINT value was specified in the .env file.")
-        elif metadata['client'] != "azure" and 'AZURE_OPENAI_ENDPOINT' in config.keys():
-            print("""
-                  Detected AZURE_OPENAI_ENDPOINT value specified in the .env file.\n
-                  If you want to change the client, please use the "-c azure" option.
-                  """)
-        else:
-            self.client = OpenAI(api_key = config['OPENAI_API_KEY'])
-        # TODO: error checking and logging here with API keys
-
-        #self.client = OpenAI(api_key = config['OPENAI_API_KEY'])
+        self.client_type = metadata["client"]
+        self.api_model = metadata["model"]
+        self.confirm_external_request = metadata.get("confirm_external_request")
+        self.confirm_generated_action = metadata.get("confirm_generated_action")
+        self.scoped_authorization = metadata.get("scoped_authorization")
+        self.api_version = os.environ.get("OPENAI_API_VERSION")
+        self.azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+        self.azure_deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+        self.base_url = os.environ.get("OPENAI_BASE_URL")
+        self.client = None
         # set client properties
         self.role = metadata['role']
-        self.model = metadata['model']
+        self.model = self.azure_deployment or self.api_model
         self.answer = ""
         #self.error_message = None
         self.tool_calls = None
@@ -58,23 +43,70 @@ class AbstractLlm(ABC):
         except:
             self.seed = None
 
+    def _get_client(self):
+        if self.client is not None:
+            return self.client
+        if self.client_type == "azure":
+            if not self.azure_endpoint or not self.api_version:
+                raise ValueError("Azure client requires AZURE_OPENAI_ENDPOINT and OPENAI_API_VERSION.")
+            api_key = os.environ.get("AZURE_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("Azure client requires AZURE_OPENAI_API_KEY (or OPENAI_API_KEY).")
+            self.client = AzureOpenAI(
+                api_key=api_key,
+                azure_endpoint=self.azure_endpoint,
+                api_version=self.api_version,
+                azure_deployment=self.azure_deployment or self.api_model,
+                **({"max_retries": 0} if self.scoped_authorization is not None else {}),
+            )
+        else:
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("Set OPENAI_API_KEY in the dedicated OntoGenix configuration before making a model request.")
+            self.client = OpenAI(
+                api_key=api_key,
+                base_url=self.base_url,
+                **({"max_retries": 0} if self.scoped_authorization is not None else {}),
+            )
+        return self.client
+
+    def _confirm_external_request(self, messages, purpose="model request", max_tokens=None):
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        if task is not None and task.cancelling():
+            raise asyncio.CancelledError
+        if self.scoped_authorization is not None:
+            return self.scoped_authorization.authorize(messages, purpose, self.model, max_tokens)
+        if self.confirm_external_request is None:
+            raise PermissionError("No human confirmation handler is configured; external disclosure was blocked.")
+        endpoint = self.azure_endpoint if self.client_type == "azure" else self.base_url
+        if not self.confirm_external_request(self.api_model, endpoint, messages, purpose):
+            raise PermissionError("The user declined external disclosure; no request was sent.")
+        if task is not None and task.cancelling():
+            raise asyncio.CancelledError
+        return {}
+
+    def _record_scoped_completion(self, completion):
+        if self.scoped_authorization is not None:
+            self.scoped_authorization.record_completion(completion)
+
     def get_api_response(self, content: str, temperature:int=0, max_tokens:Union[int|None]=None,
                          #stream:Union[bool|None]=False, 
                          seed:Union[int|None]=None):
-        completion = self.client.chat.completions.create(
+        messages = [{"role": "system", "content": self.role}, {"role": "user", "content": content}]
+        request_options = self._confirm_external_request(messages, max_tokens=max_tokens)
+        max_tokens = request_options.pop("max_tokens", max_tokens)
+        completion = self._get_client().chat.completions.create(
                 model=self.model,
-                messages=[{
-                    'role': 'system',
-                    'content': self.role
-                }, {
-                    'role': 'user',
-                    'content': content,
-                }],
+                messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=False,
-                seed=seed or self.seed
+                **request_options,
         )
+        self._record_scoped_completion(completion)
 
         try:
             self.answer = completion.choices[0].message.content
@@ -88,19 +120,14 @@ class AbstractLlm(ABC):
                          #stream:Union[bool|None]=True, 
                          seed:Union[int|None]=None):
         self.answer = ""
-        completion = self.client.chat.completions.create(
+        messages = [{"role": "system", "content": self.role}, {"role": "user", "content": content}]
+        self._confirm_external_request(messages)
+        completion = self._get_client().chat.completions.create(
                 model=self.model,
-                messages=[{
-                    'role': 'system',
-                    'content': self.role
-                }, {
-                    'role': 'user',
-                    'content': content,
-                }],
+                messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=True,
-                seed=seed or self.seed
         )
 
         for chunk in completion:
@@ -116,27 +143,20 @@ class AbstractLlm(ABC):
     async def image_interpretation(self, content: str, image_file: str, seed:Union[int|None]=None):
         base64_image, image_extension = self.image2base64(image_file)
 
-        # Create the API request
-        completion = self.client.chat.completions.create(
-            model="gpt-4-vision-preview",
-            messages=[{
-                    'role': 'system',
-                    'content': self.role
-                },{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": content},
-                        {
-                            "type": "image_url",
-                            "image_url": f"data:image/{image_extension};base64,{base64_image}"
-                        },
-                    ],
-                }
+        messages = [{"role": "system", "content": self.role}, {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": content},
+                {"type": "image_url", "image_url": f"data:image/{image_extension};base64,{base64_image}"},
             ],
+        }]
+        self._confirm_external_request(messages, purpose=f"image request ({image_file})")
+        completion = self._get_client().chat.completions.create(
+            model=self.model,
+            messages=messages,
             temperature=0,
             max_tokens=1024,
             stream=True,
-            seed=seed or self.seed
         )
 
         for chunk in completion:
@@ -147,18 +167,13 @@ class AbstractLlm(ABC):
 
     def function_calling(self, content: str, tools=Union[list|None], seed:Union[int|None]=None):
         # TODO: In Azure, for some reason, the "ontology_entity_enrichment" tool_call is None when trying to enrich the ontology
-        response = self.client.chat.completions.create(
+        messages = [{"role": "system", "content": self.role}, {"role": "user", "content": content}]
+        self._confirm_external_request(messages, purpose="tool-selection model request")
+        response = self._get_client().chat.completions.create(
             model=self.model,
-            messages=[{
-                'role': 'system',
-                'content': self.role
-            }, {
-                'role': 'user',
-                'content': content,
-            }],
+            messages=messages,
             tools=tools,
             temperature=0,
-            seed=seed or self.seed
         )
 
         self.tool_calls = response.choices[0].message.tool_calls
@@ -206,24 +221,27 @@ class AbstractLlm(ABC):
         
         for tool_call in self.tool_calls:
             function_name = tool_call.function.name
-            print("function_name: ", function_name)
-
-            # Check if the function exists in metadata
-            if function_name in self.available_functions:
-                function_to_call = self.available_functions[function_name]
-                print("function_to_call: ", function_to_call)
-                try:
-                    # Assuming arguments are in JSON format
-                    function_args = json.loads(tool_call.function.arguments)
-                    print("function arguments: ", function_args)
-                    # Calling the function with unpacked arguments
-                    await function_to_call(**function_args)
-                except json.JSONDecodeError as e:
-                    print(f"Error decoding JSON: {e}")
-                except Exception as e:
-                    print(f"Error during function call: {e}")
-            else:
+            function_to_call = self.available_functions.get(function_name)
+            if function_to_call is None:
                 print(f"Function {function_name} not found in metadata.")
+                continue
+
+            try:
+                function_args = json.loads(tool_call.function.arguments)
+                if not isinstance(function_args, dict):
+                    raise ValueError("Generated action arguments must be an object.")
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    return
+                if self.confirm_generated_action is None or not self.confirm_generated_action(function_name, function_args):
+                    continue
+                if task is not None and task.cancelling():
+                    return
+                await function_to_call(**function_args)
+            except json.JSONDecodeError as error:
+                print(f"Error decoding JSON: {error}")
+            except Exception as error:
+                print(f"Error during function call: {error}")
 
     @staticmethod
     def image2base64(image_file):
@@ -275,4 +293,3 @@ class AbstractLlm(ABC):
                 f.write(response + '\n')
         except ValueError as e:
             print(f"An error occurred: {e}")
-

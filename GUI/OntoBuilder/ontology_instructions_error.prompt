@@ -1,32 +1,21 @@
-I require your expert assistance to generate an ontology in TURTLE syntax from a provided JSON data table and a schema description.
-Ensure that you grasp the context from the JSON data and the schema description strictly adhering to these directives.
+Repair the current independent OWL candidate in Turtle syntax to address the
+reported parse or validation error. Do not change its domain assumptions,
+introduce a target ontology, approved competency question, foundation mapping,
+or desired conclusion. Keep observed physical patterns distinct from semantic
+claims. Preserve uncertainty and avoid adding unsupported restrictions,
+equivalences, identities, or instances. The repaired output remains a human-
+reviewed candidate, not approved domain truth.
 
-IMPORTANT: The generated error is provided below. Your solution MUST address this error directly.
+**Reported error:**
 {error}
 
-The input details for your task are as follows:
-
-**Json Data:**
+**Bounded data profile:**
 {json_data}
 
-**Input Related data description:**
+**Independent candidate description:**
 {data_description}
 
-**TURTLE ONTOLOGY:**
-    <Fix the thorough and exhaustive TURTLE syntax content for the proposed ontology here, without
-    condensing or shortening any part of it, ensuring strict compliance with the instructions provided.
-    Focus on the logical structure of the ontology at the level of classes and their corresponding object and data properties,
-    therefore generate the properties for every class you define in order to get all the classes interconnected
-    in a logical manner as suggested in the schema. 
-    Add domain and range for each property, Do not forget about adding labels, comments or descriptions to the classes.
-    For the descriptions, use the following equivalent IRI: `http://www.w3.org/2004/02/skos/core#definition`.
-    Sort the generated ontology in the following order: `owl:DatatypeProperty`, `owl:ObjectProperty`, `owl:Class`.
-    Remember to generate the restrictions for the ontology's classes taking into account the ObjectProperty's and DataProperty's domain and range, 
-    using `rdf:subClassOf`. Restrictions are unique, so don't duplicate them.
-    Do not generate empty classes that are equivalent to others, or at least add the `owl:equivalentClass` restriction.
-    Do not add instances.>
+**Candidate Turtle to repair:**
+{ontology}
 
-Do not write any introduction or explanations at the beginning or at the end of the writing.
-Do not add any note at the beginning or at the end of the writing.
-Also, add at the beginning all the other prefixes you would use on the generation of the current ontology.
-Please display the code as normal text in your response, without using the special block code format with triple quotes.
+Return the complete corrected Turtle candidate only.

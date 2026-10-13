@@ -4,11 +4,18 @@
 """
 # Standard and third-party libraries
 import asyncio
+import base64
+import json
+import os
+import shutil
+import uuid
+from pathlib import Path
+from urllib.parse import urlsplit
 from rdflib.plugins.parsers.notation3 import BadSyntax
 
-from PyQt5.QtWidgets import QMainWindow, QFileDialog, QDialog, QVBoxLayout, QTextEdit, QAction, QLabel # pylint: disable = no-name-in-module, line-too-long
+from PyQt5.QtWidgets import QMainWindow, QFileDialog, QDialog, QVBoxLayout, QTextEdit, QAction, QLabel, QPlainTextEdit, QDialogButtonBox, QMessageBox # pylint: disable = no-name-in-module, line-too-long
 from PyQt5.QtCore import QTimer, QCoreApplication, Qt # pylint: disable = no-name-in-module
-from PyQt5.QtGui import QTextCursor # pylint: disable = no-name-in-module
+from PyQt5.QtGui import QPixmap, QTextCursor # pylint: disable = no-name-in-module
 from PyQt5 import uic
 
 
@@ -33,7 +40,8 @@ class GuiBehavior(QMainWindow):
 
     def __init__(self,  *argv):
         super().__init__(parent=None)
-        uic.loadUi('./GUI/GUI.ui', self)
+        gui_root = Path(__file__).resolve().parents[1]
+        uic.loadUi(str(gui_root / "GUI.ui"), self)
 
         # Initial GUI Setup
         self.showMaximized()
@@ -50,6 +58,7 @@ class GuiBehavior(QMainWindow):
         #
         self.current_task = None
         self.isStopped = False
+        self._context_revision = 0
 
         # Contextual top menu buttons
         self._createActions()
@@ -67,8 +76,7 @@ class GuiBehavior(QMainWindow):
         self.metadata_manager : MetadataManager = MetadataManager(argv[0])
         self._update_context(self.metadata_manager)
 
-        # Ininitate first Genie's action
-        self._start_manage_action("Introduce yourself and explain your role to the future users.")
+        self.log.append_log("Choose an action when ready. No model request is sent at startup.", level="info", end="\n")
 
     def keyPressEvent(self, event): # pylint: disable = invalid-name
         """
@@ -121,10 +129,7 @@ class GuiBehavior(QMainWindow):
             lambda: self.on_text_changed(self.plan_builder, self.description_textEdit)
         )
         # Ontology tab callbacks
-        self.ontology_save_btn.clicked.connect(
-            lambda: self.save(self.onto_manager.toPlainText(),
-                              extension=self.metadata_manager.ontology_extension) # "ttl"
-        )
+        self.ontology_save_btn.clicked.connect(self.save_candidate_ontology)
         self.ontology_update_btn.clicked.connect(self.onto_manager.update_text)
         self.onto_manager.textChanged.connect(
             lambda: self.on_text_changed(self.ontology_builder, self.onto_manager)
@@ -229,6 +234,20 @@ class GuiBehavior(QMainWindow):
         try:
             _metadata_manager = metadata_manager or self.metadata_manager
             # Instantiate supporting classes; metadata for agents. (!) This variable is initialized here.
+            _metadata_manager.confirm_external_request = self._confirm_external_request
+            _metadata_manager.confirm_generated_action = self._confirm_generated_action
+            _metadata_manager.confirm_external_search = self._confirm_external_search
+            for agent_metadata in (
+                _metadata_manager.genie_metadata,
+                _metadata_manager.crafter_metadata,
+                _metadata_manager.planner_metadata,
+                _metadata_manager.onto_metadata,
+                _metadata_manager.mapper_metadata,
+                _metadata_manager.mermaid_metadata,
+            ):
+                agent_metadata["confirm_external_request"] = self._confirm_external_request
+                agent_metadata["confirm_generated_action"] = self._confirm_generated_action
+                agent_metadata["confirm_external_search"] = self._confirm_external_search
             _metadata_manager.genie_metadata['available_functions'] = {
                 "prompt_crafting": self.generate_crafted_prompt,
                 "data_description": self.create_data_description,
@@ -280,7 +299,10 @@ class GuiBehavior(QMainWindow):
             TODO: reset automaton
             TODO: F2: https://stackoverflow.com/questions/60059010/binding-a-function-to-a-key-in-python-working-with-gui
         """
-        # TODO: search for a way to stop the asynchronous function
+        self._context_revision += 1
+        if self.current_task is not None and not self.current_task.done():
+            self.isStopped = True
+            self.current_task.cancel()
         # Set Output Tab to first textedit tab
         self.OUTPUT_tab.setCurrentIndex(0)
         # List of all "QTextEdit" objects
@@ -300,8 +322,8 @@ class GuiBehavior(QMainWindow):
             q.setEnabled(True)
             
         self.LLManswer_textedit.insertPlainText("************* RESETED CONTEXT *************")
-        # Ininitate first Genie's action
-        self._start_manage_action("Introduce yourself and explain your role to the future users.")
+        self.isStopped = False
+        self.log.append_log("Context reset. No model request was sent.", level="info", end="\n")
 
     @staticmethod
     def on_text_changed(agent, text_edit):
@@ -315,13 +337,106 @@ class GuiBehavior(QMainWindow):
         # Enable button for saving
         self.save_json_btn.setEnabled(True)
     
+    def _confirm_external_request(self, model, endpoint, messages, purpose):
+        context_revision = self._context_revision
+        if endpoint:
+            try:
+                parsed_endpoint = urlsplit(endpoint)
+                host = parsed_endpoint.hostname or "operator-configured host"
+                port = f":{parsed_endpoint.port}" if parsed_endpoint.port else ""
+                endpoint_label = f"{parsed_endpoint.scheme or 'https'}://{host}{port}"
+            except ValueError:
+                endpoint_label = "operator-configured endpoint (details hidden)"
+        else:
+            endpoint_label = "OpenAI API default endpoint"
+        display_messages = []
+        image_previews = []
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if item.get("type") == "image_url":
+                        image_data = item.get("image_url", "")
+                        if isinstance(image_data, dict):
+                            image_data = image_data.get("url", "")
+                        if isinstance(image_data, str) and ";base64," in image_data:
+                            image = QPixmap()
+                            image.loadFromData(base64.b64decode(image_data.split(";base64,", 1)[1]))
+                            if not image.isNull():
+                                image_previews.append(image)
+                        parts.append("[attached image shown below and will be sent]")
+                    else:
+                        parts.append(item.get("text", ""))
+                content = "\n".join(parts)
+            display_messages.append({"role": message.get("role"), "content": content})
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Confirm external model request")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            f"Send the following prompt/context to model {model!r} at {endpoint_label} for {purpose}? "
+            "The provider will receive this content. Declining sends nothing."
+        ))
+        preview = QPlainTextEdit(dialog)
+        preview.setReadOnly(True)
+        preview.setPlainText(json.dumps(display_messages, ensure_ascii=False, indent=2))
+        layout.addWidget(preview)
+        for image in image_previews:
+            image_label = QLabel(dialog)
+            image_label.setPixmap(image.scaled(640, 480, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            layout.addWidget(image_label)
+        buttons = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.Cancel, parent=dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        return (
+            dialog.exec_() == QDialog.Accepted
+            and context_revision == self._context_revision
+            and not self.isStopped
+        )
+
+    def _confirm_generated_action(self, action, arguments):
+        context_revision = self._context_revision
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Confirm generated action")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            f"Run the existing OntoGenix action {action!r} with these generated arguments? "
+            "This confirms only this local action, not ontology scope or domain approval."
+        ))
+        preview = QPlainTextEdit(dialog)
+        preview.setReadOnly(True)
+        preview.setPlainText(json.dumps(arguments, ensure_ascii=False, indent=2))
+        layout.addWidget(preview)
+        buttons = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.Cancel, parent=dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        return (
+            dialog.exec_() == QDialog.Accepted
+            and context_revision == self._context_revision
+            and not self.isStopped
+        )
+
+    def _confirm_external_search(self, query):
+        context_revision = self._context_revision
+        answer = QMessageBox.question(
+            self, "Confirm web search",
+            f"Send this search query to SerpApi?\n\n{query}",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
+        )
+        return answer == QMessageBox.Yes and context_revision == self._context_revision and not self.isStopped
+
     def _run_asyncio_loop(self):
         """Run the asyncio event loop for a short duration."""
         self.loop.call_soon_threadsafe(self.loop.stop) # Thread safe stop
         self.loop.run_forever()
 
     def _start_manage_action(self, prompt: str) -> None:
-        """Start the asynchronous management of the user's prompt."""
+        """Start one user-selected action at a time."""
+        if self.current_task is not None and not self.current_task.done():
+            self.log.append_log("An OntoGenix action is already in progress.", level="warning", end="\n")
+            return
         self.current_task : asyncio.Task = asyncio.ensure_future(self._manage_action(prompt), loop=self.loop)
         asyncio.gather(self.current_task, return_exceptions=True)
 
@@ -365,6 +480,8 @@ class GuiBehavior(QMainWindow):
             self.isStopped = False
             self.log.append_log(message="", level="manager", end="\n")
             self.LLManswer_textedit.setEnabled(True)
+            if self.current_task is asyncio.current_task():
+                self.current_task = None
 
     async def generate_crafted_prompt(self, prompt: str) -> None:
         """Helps the user to craft the best prompt."""
@@ -529,7 +646,7 @@ class GuiBehavior(QMainWindow):
             await self.ontology_interaction(max_tries=max_tries)
             # TODO: if the ontology is stopped, we shouldn't be able to try to generate the graph
             if not self.isStopped:
-                self.log.append_log(message="\nINFO: Ontology created succesfully", level="info", end="\n")
+                self.log.append_log(message="\nINFO: Candidate ontology generated", level="info", end="\n")
         except MissedPreviousStepException as mspe:
             message = "\nError: " + mspe.message
             self.log.append_log(message=message, level="error", end="\n")
@@ -767,6 +884,9 @@ class GuiBehavior(QMainWindow):
 
     def create_mermaid(self) -> None:
         """Generate a mermaid diagram from the ontology text."""
+        if self.current_task is not None and not self.current_task.done():
+            self.log.append_log("An OntoGenix action is already in progress.", level="warning", end="\n")
+            return
         try:
             # If there's no `json_data`, we missed the "loading csv" step
             if not self.json_data:
@@ -782,6 +902,22 @@ class GuiBehavior(QMainWindow):
             self.log.append_log(message="\nGenerating the mermaid diagram...", level="warning")
             self.mermaid_generator.interact(self.onto_manager.toPlainText())
             graph = self.mermaid_generator.get_diagram()
+            context_revision = self._context_revision
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Confirm external diagram rendering")
+            layout = QVBoxLayout(dialog)
+            layout.addWidget(QLabel("Send this diagram source to mermaid.ink for rendering?"))
+            preview = QPlainTextEdit(dialog)
+            preview.setReadOnly(True)
+            preview.setPlainText(graph or "")
+            layout.addWidget(preview)
+            buttons = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.Cancel, parent=dialog)
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+            layout.addWidget(buttons)
+            if (dialog.exec_() != QDialog.Accepted or context_revision != self._context_revision
+                    or self.isStopped):
+                return
             self.mermaid_widget.plot(graph)
 
             # TODO: check if the mermaid diagram returns a 200 HTTP response code. Or change the library
@@ -811,6 +947,26 @@ class GuiBehavior(QMainWindow):
         options |= QFileDialog.DontUseNativeDialog
         file_name, _ = QFileDialog.getSaveFileName(self, title, "", file_filter, options=options)
         return file_name
+
+    def save_candidate_ontology(self) -> None:
+        filename, selected_filter = QFileDialog.getSaveFileName(
+            self, "Save candidate ontology", "",
+            "Turtle (*.ttl);;RDF/XML (*.rdf *.owl)",
+            options=QFileDialog.DontUseNativeDialog,
+        )
+        if not filename:
+            return
+        rdf_format = "xml" if selected_filter.startswith("RDF/XML") else "turtle"
+        suffix = ".rdf" if rdf_format == "xml" else ".ttl"
+        if Path(filename).suffix.lower() not in ({".rdf", ".owl"} if rdf_format == "xml" else {".ttl"}):
+            filename += suffix
+        try:
+            serialized = self.onto_manager.serialize_candidate_text(self.onto_manager.toPlainText(), rdf_format)
+            Path(filename).write_text(serialized, encoding="utf-8")
+        except Exception as error:
+            self.log.append_log(f"Candidate ontology export failed: {error}", level="error")
+        else:
+            self.log.append_log(f"Saved candidate ontology as {rdf_format}: {filename}")
 
     def save(self, text: str, extension: str) -> None:
         """Open a file dialog to save the given text with the specified extension."""
@@ -863,11 +1019,19 @@ class GuiBehavior(QMainWindow):
         if not file_name:
             return
         try:
-            # Log the loading process
-            self.log.append_log(f"loading the csv dataset: {file_name}")
+            source_path = Path(file_name).resolve(strict=True)
+            session_root = Path(os.environ.get("ONTOGENIX_SESSION_DIR", os.getcwd())).resolve()
+            session_root.mkdir(parents=True, exist_ok=True)
+            session_dir = session_root / f"session-{uuid.uuid4().hex}"
+            session_dir.mkdir(mode=0o700)
+            working_copy = session_dir / source_path.name
+            shutil.copy2(source_path, working_copy)
+            os.chmod(working_copy, 0o600)
+            self.metadata_manager.session_directory = str(session_dir)
+            self.log.append_log(f"Working copy created in {session_dir}; the selected source remains unchanged.")
 
-            # Set paths and configurations for the metadata manager
-            self.metadata_manager.create_config4morph(file_name)
+            # Set paths and configurations for the metadata manager using the private working copy.
+            self.metadata_manager.create_config4morph(str(working_copy))
 
             # Update the dataset paths for various components
             self.plan_builder.dataset_path = self.metadata_manager.dataset_child_folder_path
@@ -883,7 +1047,7 @@ class GuiBehavior(QMainWindow):
             self.save_json_btn.setEnabled(True)
             # Update the output tab and log the success
             self.log.append_log(f"{file_name} loaded!")
-        except ValueError as e:
+        except (OSError, ValueError) as e:
             self.log.append_log(f"An error occurred while loading csv data: {e}", level="error")
         finally:
             self.OUTPUT_tab.setCurrentIndex(0)

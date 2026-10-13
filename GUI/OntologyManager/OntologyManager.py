@@ -35,6 +35,13 @@ class OntologyManager(QTextEdit):
         """Save the current graph (ontology) to a file."""
         self.graph.serialize(destination=file_path, format=format)
 
+    @staticmethod
+    def serialize_candidate_text(text: str, format: str) -> str:
+        """Serialize the currently edited Turtle candidate without stale graph state."""
+        candidate = Graph()
+        candidate.parse(data=text, format="turtle")
+        return candidate.serialize(format=format)
+
     def get_graph(self) -> Graph:
         """Return the current RDF graph instance."""
         return self.graph

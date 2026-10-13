@@ -7,10 +7,9 @@ import configparser
 import os
 
 from typing import Union
-from dotenv import dotenv_values
 
 from GUI.tools import filepath_tools
-from GUI.tools.constants import OS_SEPARATOR, ACK_MAPPING_FORMAT, ACK_API_MODELS,ACK_ONTOLOGY_FORMAT # pylint: disable = no-name-in-module
+from GUI.tools.constants import OS_SEPARATOR, ACK_MAPPING_FORMAT, ACK_ONTOLOGY_FORMAT # pylint: disable = no-name-in-module
 
 class DatasetMetadata:
     """
@@ -155,24 +154,22 @@ class MetadataManager:
     dataset_metadata : DatasetMetadata = None
     # TODO: Read the following parameters from a configuration file (for example, ontogenix_config.json)
     base_path : str = "./GUI"
-    #api_key_path : str = OS_SEPARATOR.join([base_path, ".env"])
-    #api_model : str = 'gpt-3.5-turbo'
-    #api_model : str = 'gpt-4-1106-preview'
-    #api_model : str = 'gpt-4o-2024-05-13' # gpt-4o
     #client : str = "openai" # Parameter for OntoGenix's client
     #ssl_cert : str = None
     seed : Union[int|None] = 123
     
-    default_cacert_path : str = "C:/certs/BASF_internal_and_public_ca_bundle.crt"
-
     def __init__(self, *argv: tuple):
         # Just in case, we use the default values
         self.ontology_extension = "ttl" # "RDF/XML".lower().strip()
         self.mapping_extension = "yarrrml" # "ttl"
         self.ssl_cert : str = None
         self.client : str = "openai" # Parameter for OntoGenix's client
-        self.api_model : str = 'gpt-3.5-turbo'
-        self.api_key_path : str = OS_SEPARATOR.join([self.base_path, ".env"])
+        configured_model = os.environ.get("ONTOGENIX_API_MODEL")
+        if configured_model is None:
+            configured_model = os.environ.get("OPENAI_MODEL")
+        self.api_model : str = "default" if configured_model is None else configured_model
+        if not self.api_model.strip():
+            raise ValueError("Model alias configuration must not be empty.")
         # Read arguments from command line
         # TODO: change this to other method
         if argv:
@@ -180,12 +177,10 @@ class MetadataManager:
             if str(argv[0].client).lower().strip() == "azure":
                 self.client = "azure"
             # [api_model] Select api_model via parameter to use
-            if str(argv[0].api_model).lower().strip() in ACK_API_MODELS:
+            if argv[0].api_model is not None:
+                if not argv[0].api_model.strip():
+                    raise ValueError("--api-model requires a non-empty model alias.")
                 self.api_model = argv[0].api_model
-                print(f"INFO: Using '{self.api_model}' API MODEL")
-            elif argv[0].api_model:
-                print(f"WARNING: Invalid api_model '{argv[0].api_model}'; using default api_model '{self.api_model}' instead")
-                #raise NotImplementedError(f"Invalid api_model '{argv[0].api_model}")
             # [mapping_extension] Select the extension of mapping to use
             if str(argv[0].mapping_extension).lower().strip() in ACK_MAPPING_FORMAT:
                 self.mapping_extension = argv[0].mapping_extension
@@ -199,33 +194,35 @@ class MetadataManager:
                 os.environ["REQUESTS_CA_BUNDLE"] = cacert
                 os.environ["SSL_CERT_FILE"] = cacert
                 self.ssl_cert = cacert
-            elif (self.client == "azure" and self.ssl_cert is None):
-                config = dotenv_values(self.api_key_path)
-                if "CERT_PATH" in config.keys() and os.path.exists(config['CERT_PATH']):
-                    cacert = filepath_tools.path2posix(config['CERT_PATH'])
-                else:
-                    cacert = filepath_tools.path2posix(self.default_cacert_path)
-                os.environ["REQUESTS_CA_BUNDLE"] = cacert
-                os.environ["SSL_CERT_FILE"] = cacert
-                self.ssl_cert = cacert
+            elif self.client == "azure" and self.ssl_cert is None:
+                cert_path = os.environ.get("CERT_PATH")
+                if cert_path and os.path.exists(cert_path):
+                    cacert = filepath_tools.path2posix(cert_path)
+                    os.environ["REQUESTS_CA_BUNDLE"] = cacert
+                    os.environ["SSL_CERT_FILE"] = cacert
+                    self.ssl_cert = cacert
 
         # Interpolation of data into the JSON metadata template
+        gui_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.base_path = gui_root
         configuration = filepath_tools.interpolate_json(
-            json_path = OS_SEPARATOR.join([self.base_path, 'GuiManager/metadata.json']),
+            json_path = os.path.join(gui_root, 'GuiManager/metadata.json'),
             data = {
                 "base_path" : self.base_path,
-                "api_key_path": self.api_key_path,
                 "api_model": self.api_model,
                 "client": self.client,
                 "ssl_cert": self.ssl_cert,
                 "seed": self.seed,
                 "ontology_extension": self.ontology_extension,
                 "mapping_extension": self.mapping_extension,
+                "confirm_external_request": getattr(self, "confirm_external_request", None),
+                "confirm_generated_action": getattr(self, "confirm_generated_action", None),
+                "confirm_external_search": getattr(self, "confirm_external_search", None),
             },
             encoding = 'utf-8'
         )
         tools_definition = filepath_tools.interpolate_json(
-            json_path = OS_SEPARATOR.join([self.base_path, 'GuiManager/tools_definition.json']),
+            json_path = os.path.join(gui_root, 'GuiManager/tools_definition.json'),
             data = {
                 "ontology_extension": self.ontology_extension,
                 "mapping_extension": self.mapping_extension,

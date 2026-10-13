@@ -202,7 +202,7 @@ p, li { white-space: pre-wrap; }
         <!-- Ontology Tab -->
         <widget class="QWidget" name="owl_tab">
          <attribute name="title">
-          <string>Ontology</string>
+          <string>Candidate Ontology</string>
          </attribute>
          <layout class="QVBoxLayout" name="verticalLayout_3">
           <item>

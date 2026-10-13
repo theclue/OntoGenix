@@ -40,8 +40,6 @@ class Genie(AbstractLlm, ABC):
                 current_state=self.automata.droid.current_state.name,
                 transitions=self.automata.droid.possible_next_states()
             )
-            # TODO: it would be nice to wait here for the user confirmation before continuing
-
             # Get the response from the LLM_base
             async for chunk in self.get_async_api_response(content=self.current_prompt, seed=self.seed):
                 yield chunk

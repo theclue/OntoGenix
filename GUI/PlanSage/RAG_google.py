@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional
 #from serpapi import GoogleSearch # https://github.com/serpapi/google-search-results-python/issues/63
+import os
 import serpapi
-from dotenv import dotenv_values
 import difflib
 import re
 
@@ -15,9 +15,9 @@ class Searcher:
         """
         Initialize the searcher with an API key.
         """
-        # set api key path
-        config = dotenv_values(metadata['api_key_path'])
-        self.api_key = config['SERP_API_KEY']
+        self.enabled = os.environ.get("ONTOGENIX_ENABLE_WEB_SEARCH", "").strip().lower() in {"1", "true", "yes"}
+        self.api_key = os.environ.get("SERPAPI_API_KEY") if self.enabled else None
+        self.confirm_external_search = metadata.get("confirm_external_search")
 
     def _search_schema_org(self, query: str, domain: str= 'schema.org') -> Dict[str, str]:
         """
@@ -26,14 +26,15 @@ class Searcher:
         :param query: The search query.
         :return: A dictionary of entities and their corresponding snippets.
         """
-        params = {
-            "engine": "google",
-            "q": query + ' ' + domain,
-            "api_key": self.api_key
-        }
+        if not self.enabled:
+            return {}
+        if not self.api_key:
+            raise ValueError("Web search is enabled but SERPAPI_API_KEY is not configured.")
+        search_query = query + ' ' + domain
+        if self.confirm_external_search is None or not self.confirm_external_search(search_query):
+            return {}
         try:
-            search = serpapi.search(params)
-            results = search.get_dict()
+            results = serpapi.Client(api_key=self.api_key).search({"engine": "google", "q": search_query})
             organic_results = results.get("organic_results", [])
 
             entities = {}
@@ -47,8 +48,8 @@ class Searcher:
                         entities[key] = item['rich_snippet_table']
 
             return entities
-        except Exception as e:
-            print(f"An error occurred: {e}")
+        except Exception:
+            print("Web search failed; no result was returned.")
             return {}
 
     @staticmethod

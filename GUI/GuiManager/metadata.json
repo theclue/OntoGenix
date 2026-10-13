@@ -3,7 +3,6 @@
         "role": "you are a powerful ontology engineer that must select the appropriate function to be called.",
         "instructions": "${base_path}/GuiManager/gui_manager_role.prompt",
         "model": "${api_model}",
-        "api_key_path": "${base_path}/.env",
         "client": "${client}",
         "ssl_cert": "${ssl_cert}",
         "seed": "${seed}"
@@ -13,7 +12,6 @@
         "prompt_crafting": "${base_path}/PromptCrafter/prompt_crafting.prompt",
         "role": "You are a powerful ontology engineer that helps to craft the perfect prompt to define the high level structure of the ontology.",
         "model": "${api_model}",
-        "api_key_path": "${api_key_path}",
         "client": "${client}",
         "ssl_cert": "${ssl_cert}",
         "seed": "${seed}"
@@ -26,7 +24,6 @@
         "dataset": null,
         "role": "You are a powerful ontology engineer that generates the reasoning steps needed to generate\nthe context needed to create an ontology from a json data table.",
         "model": "${api_model}",
-        "api_key_path": "${api_key_path}",
         "client": "${client}",
         "ssl_cert": "${ssl_cert}",
         "seed": "${seed}"
@@ -39,7 +36,6 @@
         "dataset": null,
         "role": "You are a powerful ontology engineer that generates OWL ontologies in ${ontology_extension} format.",
         "model": "${api_model}",
-        "api_key_path": "${api_key_path}",
         "client": "${client}",
         "ssl_cert": "${ssl_cert}",
         "seed": "${seed}"
@@ -52,7 +48,6 @@
         "dataset": null,
         "role": "You are a powerful ontology engineer that generates mappings in ${mapping_extension} format.",
         "model": "${api_model}",
-        "api_key_path": "${api_key_path}",
         "client": "${client}",
         "ssl_cert": "${ssl_cert}",
         "seed": "${seed}"
@@ -63,7 +58,6 @@
         "examples": "${base_path}/MermaidOntoFlow/examples.prompt",
         "role": "You are a mermaid diagramming engineer that generates class Diagrams.",
         "model": "${api_model}",
-        "api_key_path": "${api_key_path}",
         "client": "${client}",
         "ssl_cert": "${ssl_cert}",
         "seed": "${seed}"

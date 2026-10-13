@@ -85,20 +85,11 @@ def parse_dataset_path(given_path: str, /, verbose: bool = False) -> tuple[str, 
     """
     if not check_if_file_exists(given_path):
         raise FileNotFoundError(f"Could not find an existing dataset in \"{given_path}\"")
-    # Split the given path into (base_path, dataset_folder, dataset_file)
-    aux_path : str = given_path
-    path_parts = aux_path.split(os.sep)
-    aux_path = join_paths(*path_parts)
-    # Handle the dataset folder and the dataset file
-    dataset_folder, dataset_file = aux_path.split("/")[-2:]
-    # Handle the base path
-    base_path = rreplace(aux_path, "/".join([dataset_folder, dataset_file]))
-    if len(aux_path.split("/")) <= 2:
-        base_path = dataset_folder
-        dataset_folder = ""
-    if base_path.endswith("/"):
-        base_path = rreplace(base_path, "/")
-    #os.path.splitext(dataset_file)[0] # Removing the file extensiond
+    # Preserve the filesystem anchor instead of rebuilding from split components.
+    dataset_path = str2path(path2posix(given_path))
+    base_path = dataset_path.parent.parent.as_posix()
+    dataset_folder = dataset_path.parent.name
+    dataset_file = dataset_path.name
     # Output
     if verbose:
         print(f'base_path : "{base_path}"')
