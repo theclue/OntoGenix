@@ -31,7 +31,7 @@ dependencies = [
     "python-dotenv==1.2.4",
     "pyvis==0.3.2",
     "pyyaml==6.0.3",
-    "rdflib==6.3.2",
+    "rdflib==7.6.0",
     "requests==2.34.2",
     "scikit-learn==1.7.2",
     "sentence_transformers==6.1.0",
