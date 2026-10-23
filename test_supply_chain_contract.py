@@ -7,9 +7,11 @@ import importlib.util
 import io
 import re
 import shutil
+import sys
 import tarfile
 import tempfile
 import unittest
+import unittest.mock
 import zipfile
 from pathlib import Path
 
@@ -139,16 +141,31 @@ class ManifestChecksumContractTests(unittest.TestCase):
 
                 target = manifest_dir / filename if filename in ("requirements.md5", "requirements.sha256") else root / filename
                 if filename == "requirements.txt":
-                    target.write_text(target.read_text(encoding="utf-8") + "# contract test\n", encoding="utf-8")
+                    contents = target.read_text(encoding="utf-8")
+                    mutated = re.sub(
+                        r"--hash=sha256:[0-9a-f]{64}",
+                        "--hash=sha256:" + ("f" * 64),
+                        contents,
+                        count=1,
+                    )
+                    self.assertNotEqual(contents, mutated)
+                    target.write_text(mutated, encoding="utf-8")
                 elif filename == "build-requirements.txt":
                     contents = target.read_text(encoding="utf-8")
-                    target.write_text(contents.replace("setuptools==75.8.0", "setuptools==75.8.1", 1), encoding="utf-8")
+                    mutated = re.sub(
+                        r"--hash=sha256:[0-9a-f]{64}",
+                        "--hash=sha256:" + ("f" * 64),
+                        contents,
+                        count=1,
+                    )
+                    self.assertNotEqual(contents, mutated)
+                    target.write_text(mutated, encoding="utf-8")
                 else:
                     digest, separator, remainder = target.read_text(encoding="ascii").partition("  ")
                     changed_digest = ("0" if digest[0] != "0" else "1") + digest[1:]
                     target.write_text(changed_digest + separator + remainder, encoding="ascii")
 
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
                     supply_chain_verify.verify_manifest_checksums(root, manifest_dir)
 
     def test_dependabot_version_bump_passes_without_manual_manifest_refresh(self):
@@ -160,16 +177,19 @@ class ManifestChecksumContractTests(unittest.TestCase):
             self.assertFalse((root / "requirements.sha256").exists())
 
             requirements_path = root / "requirements.txt"
-            requirements = requirements_path.read_text(encoding="utf-8")
-            self.assertIn("beautifulsoup4==4.12.2", requirements)
-            requirements = requirements.replace("beautifulsoup4==4.12.2", "beautifulsoup4==4.12.3", 1)
-            requirements = requirements.replace(
-                "--hash=sha256:492bbc69dca35d12daac71c4db1bfff0c876c00ef4a2ffacce226d4638eb72da",
-                f"--hash=sha256:{TEST_HASH}",
-                1,
+            first_pin = supply_chain_verify.verify_pinned_requirements(requirements_path)[0]
+            bumped_pin = f"{first_pin}.1"
+            requirements_text = requirements_path.read_text(encoding="utf-8")
+            self.assertIn(first_pin, requirements_text)
+            requirements_text = requirements_text.replace(first_pin, bumped_pin, 1)
+            requirements_text = re.sub(
+                r"--hash=sha256:[0-9a-f]{64}",
+                "--hash=sha256:" + ("a" * 64),
+                requirements_text,
+                count=1,
             )
-            self.assertIn(f"--hash=sha256:{TEST_HASH}", requirements)
-            requirements_path.write_text(requirements, encoding="utf-8")
+            self.assertIn(f"--hash=sha256:{TEST_HASH}", requirements_text)
+            requirements_path.write_text(requirements_text, encoding="utf-8")
 
             with self.assertRaises(ValueError) as error:
                 supply_chain_verify.verify_manifest_checksums(root)
@@ -179,21 +199,43 @@ class ManifestChecksumContractTests(unittest.TestCase):
             )
 
             project_path = root / "pyproject.toml"
-            project = project_path.read_text(encoding="utf-8")
-            self.assertIn('"beautifulsoup4==4.12.2"', project)
-            project_path.write_text(project.replace('"beautifulsoup4==4.12.2"', '"beautifulsoup4==4.12.3"', 1), encoding="utf-8")
+            pyproject_text = project_path.read_text(encoding="utf-8")
+            self.assertIn(f'"{first_pin}"', pyproject_text)
+            pyproject_text = pyproject_text.replace(f'"{first_pin}"', f'"{bumped_pin}"', 1)
+            project_path.write_text(pyproject_text, encoding="utf-8")
             supply_chain_verify.verify_manifest_checksums(root)
             self.assertFalse((root / "requirements.md5").exists())
             self.assertFalse((root / "requirements.sha256").exists())
 
             aligned_project = project_path.read_text(encoding="utf-8")
-            project_path.write_text(aligned_project.replace('"beautifulsoup4==4.12.3",\n', "", 1), encoding="utf-8")
+            project_path.write_text(aligned_project.replace(f'"{bumped_pin}",\n', "", 1), encoding="utf-8")
             with self.assertRaises(ValueError):
                 supply_chain_verify.verify_manifest_checksums(root)
 
             project_path.write_text(aligned_project.replace("]\n", '    "unexpected-package==1.0",\n]\n', 1), encoding="utf-8")
             with self.assertRaises(ValueError):
                 supply_chain_verify.verify_manifest_checksums(root)
+
+    def test_contract_tests_handle_bumped_dependency_versions(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temp_repo = Path(temporary_directory)
+            setuptools_pin = next(
+                pin for pin in supply_chain_verify.verify_pinned_requirements(REPO_ROOT / "build-requirements.txt")
+                if pin.startswith("setuptools==")
+            )
+            beautifulsoup_pin = next(
+                pin for pin in supply_chain_verify.verify_pinned_requirements(REPO_ROOT / "requirements.txt")
+                if pin.startswith("beautifulsoup4==")
+            )
+            for source_name in ("requirements.txt", "build-requirements.txt", "pyproject.toml"):
+                contents = (REPO_ROOT / source_name).read_text(encoding="utf-8")
+                contents = contents.replace(setuptools_pin, "setuptools==84.0.0")
+                contents = contents.replace(beautifulsoup_pin, "beautifulsoup4==4.13.0")
+                (temp_repo / source_name).write_text(contents, encoding="utf-8")
+
+            with unittest.mock.patch.object(sys.modules[__name__], "REPO_ROOT", temp_repo):
+                self.test_manifest_verification_rejects_modified_requirements_and_manifests()
+                self.test_dependabot_version_bump_passes_without_manual_manifest_refresh()
 
 
 class DistributionChecksumContractTests(unittest.TestCase):
