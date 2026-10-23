@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools==75.8.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ontogenix"
+version = "1.2"
+description = "Ontology design and knowledge graph generation assistant"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Marco S. Nobile" },
+    { name = "Matteoessori" },
+]
+dependencies = [
+    "beautifulsoup4==4.12.2",
+    "chardet==5.2.0",
+    "lxml==4.9.3",
+    "markdown==3.5",
+    "matplotlib==3.7.1",
+    "morph-kgc==2.6.4",
+    "networkx==2.8.8",
+    "nltk==3.9.1",
+    "numpy==1.25.0",
+    "openai==1.3.2",
+    "pandas==2.0.2",
+    "Pillow==10.0.1",
+    "plantuml==0.3.0",
+    "PyQt5==5.15.9",
+    "python-dotenv==1.0.0",
+    "pyvis==0.3.2",
+    "pyyaml==6.0.1",
+    "rdflib==6.3.2",
+    "requests==2.32.0",
+    "scikit-learn==1.5.0",
+    "sentence_transformers==2.7.0",
+    "serpapi==1.1.2",
+    "setuptools==75.8.0",
+    "wordcloud==1.9.2",
+]
+
+[tool.setuptools]
+py-modules = ["headless", "supply_chain_verify"]
+
+[tool.setuptools.packages.find]
+include = ["GUI", "GUI.*"]
+namespaces = true

@@ -11,3 +11,6 @@ papers/
 .DS_Store
 .venv/
 *.ignore
+dist/
+build/
+*.egg-info/
