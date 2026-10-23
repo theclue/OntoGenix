@@ -21,30 +21,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: false
       - name: Set up Python
         if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
-      - name: Verify dependency pins
+      - name: Verify dependency pins and manifests
         if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: python supply_chain_verify.py --verify-pins
-      - name: Refresh dependency checksum manifests
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: python supply_chain_verify.py --update-manifests
-      - name: Commit and push dependency checksum manifests
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: |
-          if git diff --quiet -- requirements.md5 requirements.sha256; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add requirements.md5 requirements.sha256
-          git commit -m "Update dependency checksum manifests"
-          git push origin "HEAD:$PR_BRANCH"
-        env:
-          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: python supply_chain_verify.py --verify-manifests
       - name: Enable automerge for patch and minor updates
         if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
         run: gh pr merge --auto --merge "$PR_URL"

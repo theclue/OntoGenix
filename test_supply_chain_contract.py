@@ -122,19 +122,22 @@ class DependencyPinningContractTests(unittest.TestCase):
 
 
 class ManifestChecksumContractTests(unittest.TestCase):
-    def test_repository_manifests_exist_and_verify(self):
-        for manifest_name in ("requirements.md5", "requirements.sha256"):
-            self.assertTrue((REPO_ROOT / manifest_name).is_file())
+    def test_repository_manifests_verify_without_static_root_sidecars(self):
+        self.assertFalse((REPO_ROOT / "requirements.md5").exists())
+        self.assertFalse((REPO_ROOT / "requirements.sha256").exists())
         supply_chain_verify.verify_manifest_checksums(REPO_ROOT)
 
     def test_manifest_verification_rejects_modified_requirements_and_manifests(self):
         for filename in ("requirements.txt", "build-requirements.txt", "requirements.md5", "requirements.sha256"):
             with self.subTest(file=filename), tempfile.TemporaryDirectory() as temporary_directory:
                 root = Path(temporary_directory)
-                for source_name in ("requirements.txt", "build-requirements.txt", "pyproject.toml", "requirements.md5", "requirements.sha256"):
+                for source_name in ("requirements.txt", "build-requirements.txt", "pyproject.toml"):
                     shutil.copyfile(REPO_ROOT / source_name, root / source_name)
+                manifest_dir = root / "dist"
+                supply_chain_verify.write_manifest_checksums(root, manifest_dir)
+                supply_chain_verify.verify_manifest_checksums(root, manifest_dir)
 
-                target = root / filename
+                target = manifest_dir / filename if filename in ("requirements.md5", "requirements.sha256") else root / filename
                 if filename == "requirements.txt":
                     target.write_text(target.read_text(encoding="utf-8") + "# contract test\n", encoding="utf-8")
                 elif filename == "build-requirements.txt":
@@ -146,32 +149,63 @@ class ManifestChecksumContractTests(unittest.TestCase):
                     target.write_text(changed_digest + separator + remainder, encoding="ascii")
 
                 with self.assertRaises(ValueError):
-                    supply_chain_verify.verify_manifest_checksums(root)
+                    supply_chain_verify.verify_manifest_checksums(root, manifest_dir)
 
-    def test_dependabot_version_bump_passes_after_manifest_refresh(self):
+    def test_dependabot_version_bump_passes_without_manual_manifest_refresh(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            for source_name in ("requirements.txt", "build-requirements.txt", "pyproject.toml", "requirements.md5", "requirements.sha256"):
+            for source_name in ("requirements.txt", "build-requirements.txt", "pyproject.toml"):
                 shutil.copyfile(REPO_ROOT / source_name, root / source_name)
+            self.assertFalse((root / "requirements.md5").exists())
+            self.assertFalse((root / "requirements.sha256").exists())
 
             requirements_path = root / "requirements.txt"
             requirements = requirements_path.read_text(encoding="utf-8")
             self.assertIn("beautifulsoup4==4.12.2", requirements)
-            requirements_path.write_text(requirements.replace("beautifulsoup4==4.12.2", "beautifulsoup4==4.12.3", 1), encoding="utf-8")
+            requirements = requirements.replace("beautifulsoup4==4.12.2", "beautifulsoup4==4.12.3", 1)
+            requirements = requirements.replace(
+                "--hash=sha256:492bbc69dca35d12daac71c4db1bfff0c876c00ef4a2ffacce226d4638eb72da",
+                f"--hash=sha256:{TEST_HASH}",
+                1,
+            )
+            self.assertIn(f"--hash=sha256:{TEST_HASH}", requirements)
+            requirements_path.write_text(requirements, encoding="utf-8")
+
+            with self.assertRaises(ValueError) as error:
+                supply_chain_verify.verify_manifest_checksums(root)
+            self.assertEqual(
+                "pyproject.toml project dependencies do not match requirements.txt",
+                str(error.exception),
+            )
 
             project_path = root / "pyproject.toml"
             project = project_path.read_text(encoding="utf-8")
             self.assertIn('"beautifulsoup4==4.12.2"', project)
             project_path.write_text(project.replace('"beautifulsoup4==4.12.2"', '"beautifulsoup4==4.12.3"', 1), encoding="utf-8")
+            supply_chain_verify.verify_manifest_checksums(root)
+            self.assertFalse((root / "requirements.md5").exists())
+            self.assertFalse((root / "requirements.sha256").exists())
 
+            aligned_project = project_path.read_text(encoding="utf-8")
+            project_path.write_text(aligned_project.replace('"beautifulsoup4==4.12.3",\n', "", 1), encoding="utf-8")
             with self.assertRaises(ValueError):
                 supply_chain_verify.verify_manifest_checksums(root)
 
-            supply_chain_verify.write_manifest_checksums(root)
-            supply_chain_verify.verify_manifest_checksums(root)
+            project_path.write_text(aligned_project.replace("]\n", '    "unexpected-package==1.0",\n]\n', 1), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                supply_chain_verify.verify_manifest_checksums(root)
 
 
 class DistributionChecksumContractTests(unittest.TestCase):
+    def test_write_and_verify_manifest_checksums_in_dist(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            dist_dir = Path(temporary_directory) / "dist"
+            supply_chain_verify.write_manifest_checksums(REPO_ROOT, dist_dir)
+
+            self.assertTrue((dist_dir / "requirements.md5").is_file())
+            self.assertTrue((dist_dir / "requirements.sha256").is_file())
+            supply_chain_verify.verify_manifest_checksums(REPO_ROOT, dist_dir)
+
     @unittest.skipUnless(HAS_SETUPTOOLS, "setuptools is not installed in host Python")
     def test_build_creates_packages_and_all_trust_files(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -187,8 +221,11 @@ class DistributionChecksumContractTests(unittest.TestCase):
                     self.assertTrue((dist_dir / f"{artifact.name}.{algorithm}").is_file())
             for manifest in ("CHECKSUMS.md5", "CHECKSUMS.sha256"):
                 self.assertTrue((dist_dir / manifest).is_file())
+            self.assertTrue((dist_dir / "requirements.md5").is_file())
+            self.assertTrue((dist_dir / "requirements.sha256").is_file())
 
             supply_chain_verify.verify_dist_checksums(dist_dir)
+            supply_chain_verify.verify_manifest_checksums(REPO_ROOT, dist_dir)
 
     def test_checksum_writer_handles_synthetic_archives_without_setuptools(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -275,23 +312,14 @@ class WorkflowSecurityContractTests(unittest.TestCase):
         self.assertIn("dependabot/fetch-metadata", workflow)
         self.assertIn("gh pr merge --auto", workflow)
 
-    def test_dependabot_refreshes_and_pushes_manifests_before_automerge(self):
+    def test_dependabot_verifies_manifests_before_automerge_without_pushing_commits(self):
         workflow = (REPO_ROOT / ".github/workflows/dependabot-automerge.yml").read_text(encoding="utf-8")
 
-        self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", workflow)
-        self.assertIn("ref: ${{ github.event.pull_request.head.ref }}", workflow)
-        self.assertIn("actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0", workflow)
-        self.assertIn("python supply_chain_verify.py --verify-pins", workflow)
-        self.assertIn("python supply_chain_verify.py --update-manifests", workflow)
-        self.assertIn("git diff --quiet -- requirements.md5 requirements.sha256", workflow)
-        self.assertIn("git add requirements.md5 requirements.sha256", workflow)
-        self.assertIn('git push origin "HEAD:$PR_BRANCH"', workflow)
-        self.assertLess(workflow.index("ref: ${{ github.event.pull_request.head.ref }}"), workflow.index("--verify-pins"))
-        self.assertLess(workflow.index("--verify-pins"), workflow.index("--update-manifests"))
-        self.assertLess(workflow.index("--update-manifests"), workflow.index("git diff --quiet"))
-        self.assertLess(workflow.index("git add requirements.md5 requirements.sha256"), workflow.index("git commit"))
-        self.assertLess(workflow.index("git commit"), workflow.index("git push origin"))
-        self.assertLess(workflow.index("git push origin"), workflow.index("gh pr merge --auto"))
+        self.assertIn("python supply_chain_verify.py --verify-manifests", workflow)
+        self.assertLess(workflow.index("--verify-manifests"), workflow.index("gh pr merge --auto"))
+        self.assertNotIn("--update-manifests", workflow)
+        self.assertNotIn("git commit", workflow)
+        self.assertNotIn("git push", workflow)
 
     def test_ci_verifies_sha_supply_chain_tests_and_trust_files(self):
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

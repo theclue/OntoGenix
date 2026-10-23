@@ -96,12 +96,42 @@ def _project_dependencies(project_path):
     return dependencies
 
 
+def _build_system_requires(project_path):
+    project_path = Path(project_path)
+    if not project_path.is_file():
+        raise ValueError(f"Project metadata does not exist: {project_path}")
+    contents = project_path.read_text(encoding="utf-8")
+    section_match = re.search(r"(?ms)^\[build-system\][ \t]*\n(.*?)(?=^\[|\Z)", contents)
+    if not section_match:
+        raise ValueError(f"Project metadata has no [build-system] section: {project_path}")
+    requires_match = re.search(r"(?ms)^[ \t]*requires[ \t]*=[ \t]*(\[.*?\])", section_match.group(1))
+    if not requires_match:
+        raise ValueError(f"Project metadata has no build-system requirements list: {project_path}")
+    try:
+        requirements = ast.literal_eval(requires_match.group(1))
+    except (SyntaxError, ValueError) as error:
+        raise ValueError(f"Invalid build-system requirements list in {project_path}") from error
+    if not isinstance(requirements, list) or any(
+        not isinstance(item, str) or not PIN_PATTERN.fullmatch(item) for item in requirements
+    ):
+        raise ValueError("pyproject.toml build-system requirements must be exactly pinned")
+    return requirements
+
+
 def _verify_dependency_contract(repo_root):
     repo_root = Path(repo_root)
     requirements = verify_pinned_requirements(repo_root / "requirements.txt")
-    verify_pinned_requirements(repo_root / "build-requirements.txt")
-    if _project_dependencies(repo_root / "pyproject.toml") != requirements:
+    build_requirements = verify_pinned_requirements(repo_root / "build-requirements.txt")
+    pyproject_path = repo_root / "pyproject.toml"
+    if _build_system_requires(pyproject_path) != build_requirements:
+        raise ValueError("pyproject.toml build-system requirements do not match build-requirements.txt")
+
+    pyproject_deps = _project_dependencies(pyproject_path)
+    if any(not PIN_PATTERN.fullmatch(item) for item in pyproject_deps):
+        raise ValueError("pyproject.toml project dependencies must be exactly pinned")
+    if pyproject_deps != requirements:
         raise ValueError("pyproject.toml project dependencies do not match requirements.txt")
+    return requirements
 
 
 def _digest(path, algorithm):
@@ -146,35 +176,45 @@ def _verify_single_checksum(checksum_path, filename, algorithm, actual_digest):
         raise ValueError(f"Checksum mismatch for {filename} in {checksum_path}")
 
 
-def write_manifest_checksums(repo_root):
+def write_manifest_checksums(repo_root=Path("."), output_dir=None):
     """Write SHA256 and MD5 manifests for the pinned requirements and project metadata."""
     repo_root = Path(repo_root)
+    _verify_dependency_contract(repo_root)
+    target_dir = Path(output_dir) if output_dir is not None else Path(repo_root)
+    target_dir.mkdir(parents=True, exist_ok=True)
     for algorithm, manifest_name in (("sha256", "requirements.sha256"), ("md5", "requirements.md5")):
         entries = []
         for filename in MANIFEST_TARGET_FILES:
             entries.append(f"{_digest(repo_root / filename, algorithm)}  {filename}")
-        (repo_root / manifest_name).write_text("\n".join(entries) + "\n", encoding="ascii")
+        (target_dir / manifest_name).write_text("\n".join(entries) + "\n", encoding="ascii")
+    verify_manifest_checksums(repo_root, target_dir)
+    return target_dir / "requirements.sha256", target_dir / "requirements.md5"
 
 
-def verify_manifest_checksums(repo_root):
+def verify_manifest_checksums(repo_root=Path("."), manifest_dir=None):
     """Verify pinned requirements and their SHA256/MD5 manifest entries."""
     repo_root = Path(repo_root)
     _verify_dependency_contract(repo_root)
-    expected_files = MANIFEST_TARGET_FILES
-    for algorithm, manifest_name in (("sha256", "requirements.sha256"), ("md5", "requirements.md5")):
-        manifest_path = repo_root / manifest_name
-        checksums = _parse_checksum_lines(manifest_path, algorithm)
-        if set(checksums) != set(expected_files):
-            missing = sorted(set(expected_files) - set(checksums))
-            raise ValueError(f"{manifest_path} is missing checksum entries: {', '.join(missing)}")
-        for filename in expected_files:
-            if checksums[filename] != _digest(repo_root / filename, algorithm):
-                raise ValueError(f"Checksum mismatch for {filename} in {manifest_path}")
+    target_dir = Path(manifest_dir) if manifest_dir is not None else Path(repo_root)
+    if (
+        manifest_dir is not None
+        or (target_dir / "requirements.sha256").exists()
+        or (target_dir / "requirements.md5").exists()
+    ):
+        expected_files = set(MANIFEST_TARGET_FILES)
+        for algorithm, manifest_name in (("sha256", "requirements.sha256"), ("md5", "requirements.md5")):
+            manifest_path = target_dir / manifest_name
+            checksums = _parse_checksum_lines(manifest_path, algorithm)
+            if set(checksums) != expected_files:
+                raise ValueError(f"{manifest_path} must contain exactly the entries in MANIFEST_TARGET_FILES")
+            for filename in MANIFEST_TARGET_FILES:
+                if checksums[filename] != _digest(repo_root / filename, algorithm):
+                    raise ValueError(f"Checksum mismatch for {filename} in {manifest_path}")
 
 
 def _package_files(repo_root):
     """Collect runtime sources and metadata without caches or local data."""
-    repo_root = Path(repo_root)
+    repo_root = Path(repo_root).resolve()
     filenames = [
         "CITATION.cff",
         "LICENSE",
@@ -187,15 +227,27 @@ def _package_files(repo_root):
     package_files = {}
     for filename in filenames:
         path = repo_root / filename
+        if path.is_symlink():
+            raise ValueError(f"Package source must not be a symlink: {filename}")
+        if not path.resolve().is_relative_to(repo_root):
+            raise ValueError(f"Package source escapes repository root: {filename}")
         if not path.is_file():
             raise ValueError(f"Required package source is missing: {filename}")
         package_files[filename] = path.read_bytes()
 
     gui_root = repo_root / "GUI"
+    if gui_root.is_symlink():
+        raise ValueError("Required package source directory must not be a symlink: GUI")
+    if not gui_root.resolve().is_relative_to(repo_root):
+        raise ValueError("Package source directory escapes repository root: GUI")
     if not gui_root.is_dir():
         raise ValueError("Required package source directory is missing: GUI")
     for path in sorted(gui_root.rglob("*")):
         relative = path.relative_to(repo_root)
+        if path.is_symlink():
+            raise ValueError(f"Package source must not be a symlink: {relative.as_posix()}")
+        if not path.resolve().is_relative_to(repo_root):
+            raise ValueError(f"Package source escapes repository root: {relative.as_posix()}")
         if (
             not path.is_file()
             or "__pycache__" in relative.parts
@@ -363,6 +415,7 @@ def build_and_verify_packages(dist_dir, repo_root):
         raise ValueError("Core source files changed during package creation")
 
     write_dist_checksums(dist_dir)
+    write_manifest_checksums(repo_root, dist_dir)
     return [dist_dir / filename for filename in sorted((sdist_filename, wheel_filename))]
 
 
@@ -370,7 +423,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--verify-pins", action="store_true", help="verify all requirements are exactly pinned")
-    actions.add_argument("--update-manifests", action="store_true", help="write requirements SHA256 and MD5 manifests")
+    actions.add_argument("--update-manifests", nargs="?", const="", metavar="OUTPUT_DIR", help="write requirements SHA256 and MD5 manifests")
     actions.add_argument("--verify-manifests", action="store_true", help="verify dependency and project metadata manifests")
     actions.add_argument("--build-and-verify", metavar="DIST_DIR", help="build and verify sdist and wheel packages")
     actions.add_argument("--write-dist-checksums", metavar="DIST_DIR", help="write and verify package checksums")
@@ -381,8 +434,8 @@ def main(argv=None):
     try:
         if args.verify_pins:
             _verify_dependency_contract(repo_root)
-        elif args.update_manifests:
-            write_manifest_checksums(repo_root)
+        elif args.update_manifests is not None:
+            write_manifest_checksums(repo_root, args.update_manifests or None)
         elif args.verify_manifests:
             verify_manifest_checksums(repo_root)
         elif args.build_and_verify:

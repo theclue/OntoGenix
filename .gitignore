@@ -14,3 +14,5 @@ papers/
 dist/
 build/
 *.egg-info/
+/requirements.sha256
+/requirements.md5
