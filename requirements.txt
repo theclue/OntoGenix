@@ -231,9 +231,9 @@ matplotlib==3.7.1 \
     --hash=sha256:f883a22a56a84dba3b588696a2b8a1ab0d2c3d41be53264115c71b0a942d8fdb \
     --hash=sha256:fbdeeb58c0cf0595efe89c05c224e0a502d1aa6a8696e68a73c3efc6bc354304
 
-morph-kgc==2.6.4 \
-    --hash=sha256:49af8f9788a16855701a62c6d27cc3369ca589881fd2b68e4db35c4f4b37fd60 \
-    --hash=sha256:a6e455714b3ee5d66e0511f2cf5d0df572dab47f081e05c501c7f95add333969
+morph-kgc==2.10.0 \
+    --hash=sha256:8ce01d8db014a3cbe9d2e77f61c543ea8d19a7f9ec7cd6ad4abf203bd9ce9ba7 \
+    --hash=sha256:a8d01d4c2118821ed46490bc6445d0d06f0f5dd23e29eeeee1da64ea99e1a124
 
 networkx==3.4.2 \
     --hash=sha256:307c3669428c5362aab27c8a1260aa8f47c4e91d3891f48be0141738d8d053e1 \
