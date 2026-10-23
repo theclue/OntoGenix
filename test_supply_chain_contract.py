@@ -86,6 +86,11 @@ class DependencyPinningContractTests(unittest.TestCase):
         normalized_names = [re.sub(r"[-_.]+", "-", item.split("==", 1)[0]).lower() for item in requirements]
         self.assertEqual(len(normalized_names), len(set(normalized_names)))
 
+    def test_build_requirements_pin_complete_build_backend_closure(self):
+        pinned = supply_chain_verify.verify_pinned_requirements(REPO_ROOT / "build-requirements.txt")
+        names = [item.split("==", 1)[0].lower() for item in pinned]
+        self.assertEqual(["packaging", "setuptools", "wheel"], names)
+
     def test_runtime_and_build_requirements_have_hashes(self):
         for filename in ("requirements.txt", "build-requirements.txt"):
             with self.subTest(file=filename):
