@@ -91,6 +91,14 @@ class DependencyPinningContractTests(unittest.TestCase):
         names = [item.split("==", 1)[0].lower() for item in pinned]
         self.assertEqual(["packaging", "setuptools", "wheel"], names)
 
+    def test_pyproject_requires_python_311_or_newer_for_security_updates(self):
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertRegex(pyproject, r'(?m)^requires-python\s*=\s*">=3\.11"\s*$')
+        pinned = supply_chain_verify.verify_pinned_requirements(REPO_ROOT / "requirements.txt")
+        pillow_pin = next(item for item in pinned if item.lower().startswith("pillow=="))
+        pillow_version = tuple(int(part) for part in pillow_pin.split("==", 1)[1].split("."))
+        self.assertGreaterEqual(pillow_version, (13, 0, 0))
+
     def test_runtime_and_build_requirements_have_hashes(self):
         for filename in ("requirements.txt", "build-requirements.txt"):
             with self.subTest(file=filename):

@@ -7,7 +7,7 @@ name = "ontogenix"
 version = "1.2"
 description = "Ontology design and knowledge graph generation assistant"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [
     { name = "Marco S. Nobile" },
@@ -25,7 +25,7 @@ dependencies = [
     "numpy==2.2.6",
     "openai==3.35.1",
     "pandas==2.0.2",
-    "Pillow==12.3.0",
+    "Pillow==13.0.0",
     "plantuml==0.3.0",
     "PyQt5==5.15.11",
     "python-dotenv==1.2.4",
