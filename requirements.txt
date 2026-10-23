@@ -437,9 +437,9 @@ scikit-learn==1.5.0 \
     --hash=sha256:df8ccabbf583315f13160a4bb06037bde99ea7d8211a69787a6b7c5d4ebb6fc3 \
     --hash=sha256:f405c4dae288f5f6553b10c4ac9ea7754d5180ec11e296464adb5d6ac68b6ef5
 
-sentence_transformers==2.7.0 \
-    --hash=sha256:2f7df99d1c021dded471ed2d079e9d1e4fc8e30ecb06f957be060511b36f24ea \
-    --hash=sha256:6a7276b05a95931581bbfa4ba49d780b2cf6904fa4a171ec7fd66c343f761c98
+sentence_transformers==6.1.0 \
+    --hash=sha256:299025df51550dc1a38f05be27a9b0bf881c4e5e70542b3b7757d05e00aa3868 \
+    --hash=sha256:eb8122f4d180f552eda26dc3d77e84e8c11dc2b1d456a406b9f24abb70ceeadd
 
 serpapi==1.1.2 \
     --hash=sha256:446943df71e8afde69906be7e918b44c8d6cdcb84e69c37d01112c313945b384 \
