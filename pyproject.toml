@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools==75.8.0", "wheel==0.45.1"]
+requires = ["setuptools==84.0.0", "wheel==0.45.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -36,7 +36,7 @@ dependencies = [
     "scikit-learn==1.7.2",
     "sentence_transformers==6.1.0",
     "serpapi==1.1.2",
-    "setuptools==75.8.0",
+    "setuptools==84.0.0",
     "wordcloud==1.9.2",
 ]
 
