@@ -11,15 +11,7 @@ The configured provider must expose a model compatible with the selected native 
 
 ## Installation
 
-This fork is intended to run in the dedicated `ontology-stack` payload, not
-with host-global Python/Qt dependencies. The isolated payload and headless
-entrypoint are present as work in progress, but the headless factory route has
-not yet been verified end to end; do not install
-`requirements.txt` on the host. The native headless entrypoint is
-`python headless.py`; the existing GUI entrypoint remains `python -m GUI` inside
-that runtime. Configure API values only through the operator-managed runtime
-environment; never store real credentials in this repository or an application
-`.env` file.
+This fork is intended to run as part of an agentic `ontology-stack`, thus I decided to add a CLI/headless route to use the tool.
 
 
 
