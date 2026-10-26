@@ -23,7 +23,7 @@ dependencies = [
     "networkx==3.4.2",
     "nltk==3.10.4",
     "numpy==2.2.6",
-    "openai==3.35.1",
+    "openai==3.36.0",
     "pandas==2.0.2",
     "Pillow==13.0.0",
     "plantuml==0.3.0",
