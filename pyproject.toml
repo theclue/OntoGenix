@@ -22,7 +22,7 @@ dependencies = [
     "morph-kgc==2.10.0",
     "networkx==3.4.2",
     "nltk==3.10.4",
-    "numpy==2.2.6",
+    "numpy==2.4.6",
     "openai==3.35.1",
     "pandas==2.0.2",
     "Pillow==13.0.0",
