@@ -365,7 +365,8 @@ class WorkflowSecurityContractTests(unittest.TestCase):
 
         self.assertIn("dependabot[bot]", workflow)
         self.assertIn("dependabot/fetch-metadata", workflow)
-        self.assertIn("gh pr merge --auto", workflow)
+        self.assertIn('gh pr merge --auto --squash "$PR_URL"', workflow)
+        self.assertNotIn("--merge", workflow)
 
     def test_dependabot_verifies_manifests_before_automerge_without_pushing_commits(self):
         workflow = (REPO_ROOT / ".github/workflows/dependabot-automerge.yml").read_text(encoding="utf-8")
