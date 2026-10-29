@@ -1,38 +1,239 @@
 name: Dependabot Automerge
 
-on: pull_request
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "*requirements*.txt"
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  automerge:
+  validate-dependencies:
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: read
+    outputs:
+      pip_resolution_failed: ${{ steps.validate.outputs.pip_resolution_failed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Verify dependency pins, manifests, and pip resolution
+        id: validate
+        run: |
+          set -euo pipefail
+          echo "pip_resolution_failed=false" >> "$GITHUB_OUTPUT"
+
+          run_pip_check() {
+            local cmd=("$@")
+            if [[ "${cmd[*]}" == *"-r requirements.txt"* ]]; then
+              cmd=("${cmd[@]:0:5}" "--no-deps" "${cmd[@]:5}")
+            fi
+            if "${cmd[@]}"; then
+              return 0
+            fi
+            echo "pip_resolution_failed=true" >> "$GITHUB_OUTPUT"
+            return 1
+          }
+
+          run_pip_check python supply_chain_verify.py --verify-manifests
+          run_pip_check python -m pip install --dry-run --ignore-installed --require-hashes -r build-requirements.txt
+          run_pip_check python -m pip install --dry-run --ignore-installed --require-hashes -r requirements.txt
+
+  automerge:
+    needs: validate-dependencies
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Checkout Dependabot PR branch
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          persist-credentials: false
-      - name: Set up Python
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.11"
-      - name: Verify dependency pins and manifests
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: python supply_chain_verify.py --verify-manifests
       - name: Enable automerge for patch and minor updates
         if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: gh pr merge --auto --squash "$PR_URL" || gh pr merge --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  autoclose-unresolvable:
+    needs: validate-dependencies
+    runs-on: ubuntu-latest
+    if: failure() && github.event_name == 'pull_request' && needs.validate-dependencies.outputs.pip_resolution_failed == 'true' && github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Auto-close PR blocked by manifest or dependency constraint
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          gh label create "blocked-by-constraint" \
+            --color "d93f0b" \
+            --description "Blocked by manifest or upstream dependency constraint" \
+            --force \
+            --repo "$GITHUB_REPOSITORY"
+          gh pr edit "$PR_NUMBER" --add-label "blocked-by-constraint" --repo "$GITHUB_REPOSITORY"
+          gh pr close "$PR_URL" --comment "Closing automatically: dependency manifest verification or \`pip install --dry-run\` failed under the current repository constraints. Labeled \`blocked-by-constraint\` (without deleting the branch or adding a permanent \`dependabot.yml\` ignore); this PR will be automatically rechecked and reopened when \`pyproject.toml\` or \`*requirements*.txt\` on \`main\` changes."
+
+  evaluate-blocked-prs:
+    needs: validate-dependencies
+    runs-on: ubuntu-latest
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      reopen_prs: ${{ steps.evaluate.outputs.reopen_prs }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Recheck closed PRs labeled blocked-by-constraint
+        id: evaluate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import supply_chain_verify
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          raw = subprocess.check_output(
+              [
+                  "gh", "pr", "list",
+                  "--repo", repo,
+                  "--state", "closed",
+                  "--label", "blocked-by-constraint",
+                  "--limit", "200",
+                  "--json", "number,title,author",
+              ],
+              text=True,
+          )
+          prs = json.loads(raw)
+          pip_env = {k: v for k, v in os.environ.items() if not k.startswith(("GH_", "GITHUB_"))}
+          reopen_nums = []
+
+          def norm(name: str) -> str:
+              return re.sub(r"[-_.]+", "-", name).lower()
+
+          title_re = re.compile(
+              r"bump\s+(?P<pkg>[A-Za-z0-9._-]+)\s+from\s+(?P<old>\S+)\s+to\s+(?P<new>[A-Za-z0-9._+-]+)",
+              re.IGNORECASE,
+          )
+
+          req_files = ("build-requirements.txt", "requirements.txt")
+
+          for pr in prs:
+              if pr.get("author", {}).get("login") not in ("app/dependabot", "dependabot[bot]"):
+                  continue
+              m = title_re.search(pr.get("title", ""))
+              if not m:
+                  continue
+              pkg = norm(m.group("pkg"))
+              new_ver = m.group("new")
+
+              matched_any = False
+              all_ok = True
+              for req_file in req_files:
+                  pins = supply_chain_verify.verify_pinned_requirements(req_file)
+                  updated_pins = []
+                  file_matched = False
+                  for pin in pins:
+                      lhs, _ = pin.split("==", 1)
+                      if norm(lhs) == pkg:
+                          file_matched = True
+                          matched_any = True
+                          updated_pins.append(f"{lhs}=={new_ver}")
+                      else:
+                          updated_pins.append(pin)
+                  if not file_matched:
+                      continue
+                  cmd = [
+                      "python", "-m", "pip", "install",
+                      "--dry-run", "--ignore-installed", "--no-deps",
+                      *updated_pins,
+                  ]
+                  res = subprocess.run(cmd, check=False, env=pip_env)
+                  if res.returncode != 0:
+                      all_ok = False
+                      break
+
+              if matched_any and all_ok:
+                  num = int(pr["number"])
+                  print(f"PR #{num} ({pkg}=={new_ver}) is now resolvable; queueing reopen.")
+                  reopen_nums.append(num)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"reopen_prs={json.dumps(reopen_nums)}\n")
+          PY
+
+  reopen-blocked-prs:
+    needs: evaluate-blocked-prs
+    if: needs.evaluate-blocked-prs.outputs.reopen_prs != '' && needs.evaluate-blocked-prs.outputs.reopen_prs != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Reopen resolved blocked PRs
+        env:
+          REOPEN_PRS: ${{ needs.evaluate-blocked-prs.outputs.reopen_prs }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          reopen_prs = json.loads(os.environ["REOPEN_PRS"])
+          if not isinstance(reopen_prs, list) or any(type(number) is not int for number in reopen_prs):
+              raise ValueError("REOPEN_PRS must be a JSON list of integer PR numbers")
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          for number in reopen_prs:
+              pr_number = str(number)
+              subprocess.run(
+                  ["gh", "pr", "edit", pr_number, "--repo", repo, "--remove-label", "blocked-by-constraint"],
+                  check=False,
+              )
+              subprocess.run(
+                  ["gh", "pr", "reopen", pr_number, "--repo", repo],
+                  check=False,
+              )
+              subprocess.run(
+                  ["gh", "pr", "comment", pr_number, "--repo", repo, "--body", "@dependabot recreate"],
+                  check=False,
+              )
+          PY

@@ -342,7 +342,7 @@ class DependabotCooldownContractTests(unittest.TestCase):
             end = entries[index + 1].start() if index + 1 < len(entries) else len(config)
             block = config[entry.start():end]
             with self.subTest(ecosystem=entry.group(1)):
-                self.assertRegex(block, r"(?m)^    cooldown:[ \t]*\n      default-days:[ \t]*5[ \t]*$")
+                self.assertRegex(block, r"(?m)^    cooldown:[ \t]*\n      default-days:[ \t]*8[ \t]*$")
 
 
 class WorkflowSecurityContractTests(unittest.TestCase):
