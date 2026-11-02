@@ -67,9 +67,37 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable automerge for patch and minor updates
         if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: gh pr merge --auto --squash "$PR_URL" || gh pr merge --squash "$PR_URL"
+        run: |
+          max_attempts=6
+          for attempt in $(seq 1 "$max_attempts"); do
+            pr_info="$(gh pr view "$PR_URL" --json state,mergeable,headRefOid --jq '[.state, .mergeable, .headRefOid] | @tsv')"
+            IFS=$'\t' read -r pr_state pr_mergeable current_head <<< "$pr_info"
+            if [[ "$pr_state" == "MERGED" ]]; then
+              exit 0
+            fi
+            if [[ -n "$PR_HEAD_SHA" && "$current_head" != "$PR_HEAD_SHA" ]]; then
+              echo "::error::PR head changed from ${PR_HEAD_SHA} to ${current_head}"
+              exit 1
+            fi
+            if [[ "$pr_mergeable" == "CONFLICTING" ]]; then
+              echo "::error::PR has merge conflicts with base branch"
+              exit 1
+            fi
+            if [[ "$pr_mergeable" == "UNKNOWN" && "$attempt" -lt "$max_attempts" ]]; then
+              sleep $((5 + RANDOM % 6))
+            fi
+            if gh pr merge --auto --squash "$PR_URL" || \
+               gh pr merge --squash --delete-branch --match-head-commit "$current_head" "$PR_URL"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq "$max_attempts" ]]; then
+              exit 1
+            fi
+            sleep $((8 + RANDOM % 10))
+          done
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   autoclose-unresolvable:
