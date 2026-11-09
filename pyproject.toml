@@ -23,7 +23,7 @@ dependencies = [
     "networkx==3.6.1",
     "nltk==3.10.4",
     "numpy==2.4.6",
-    "openai==3.41.0",
+    "openai==3.42.0",
     "pandas==3.1.0",
     "Pillow==13.0.0",
     "plantuml==0.3.0",
@@ -35,7 +35,7 @@ dependencies = [
     "requests==2.34.2",
     "scikit-learn==1.9.1",
     "sentence_transformers==6.2.0",
-    "serpapi==1.1.2",
+    "serpapi==1.2.0",
     "setuptools==84.2.1",
     "wordcloud==1.9.6",
 ]
