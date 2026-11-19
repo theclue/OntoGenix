@@ -668,9 +668,9 @@ scikit-learn==1.9.1 \
     --hash=sha256:e5d7b18a5b9dca241a74695f3275fa4c895a9dadc72b3d8df5fa9d1083c9b83e \
     --hash=sha256:ffbcbbbb44202fbe9bc64bced25a145759adb9ef010b3d37a8064958ac13df2a
 
-sentence_transformers==6.2.0 \
-    --hash=sha256:1e3cd8796ab7bcad4cfa2f51e2083d8b37b15d6b68e6fa6b91a147c67380574d \
-    --hash=sha256:ffb51ccfef65427cfa61776d0eeeb257600b0099cf0c7533ae9a6856d31e4665
+sentence_transformers==6.3.0 \
+    --hash=sha256:a19acbf76a958817136ee4e89f90b483255d77f3dc9a7309814f7600592c450e \
+    --hash=sha256:fb89d876edb6cb3a82b7a90f74bd7eb1118412ffabe56b249bd1884d35e705db
 
 serpapi==1.2.0 \
     --hash=sha256:16e7d5dd1c7bfd6817e3c4b7b6a7c2dd6e6142f0dec534cf76fa5474a93fe4a9 \
